@@ -1,74 +1,94 @@
-int out1 = 10; // PWM pin for motor speed control
-int ena = 10; // PWM pin for motor speed control (same as out1)
-int in1 = 9; // Motor control pin 1
-int in2 = 8; // Motor control pin 2
+#include <stddef.h>
 
-int desiredSpeed = 0; // Initialize desired speed
+// Pin definitions
+constexpr uint8_t MOTOR_PWM_PIN = 10;
+constexpr uint8_t MOTOR_CONTROL_PIN_1 = 9;
+constexpr uint8_t MOTOR_CONTROL_PIN_2 = 8;
+
+// Helpful constants
+
+// Minimum required PWM value to start the motor spinning
+constexpr uint8_t MINIMUM_MOTOR_PWM = 90;
+
+// Motor class for controlling current ramping
+class Motor {
+  public:
+    Motor() : m_desiredPWM(0), m_currentPWM(0) {}
+
+    // Sets the desired PWM for the motor to be set to, which will eventually
+    // be reached.
+    void setDesiredPWM(uint8_t pwm) {
+      this->m_desiredPWM = pwm;
+    }
+
+    // Gets the actual current PWM setting for the motor
+    uint8_t getCurrentPWM() {
+      return this->m_currentPWM;
+    }
+
+    // Should be called as close to every 15 milliseconds as you can manage
+    // DEFINITELY not more often
+    void update() {
+      // Get the difference between the desired PWM and the current PWM as a signed integer
+      const int16_t settingDelta = (int16_t)(static_cast<int16_t>(this->m_desiredPWM) - static_cast<int16_t>(this->m_currentPWM));
+
+      if (settingDelta > 0) {
+        // Calculate our little limit function
+        // This limits the maximum derivative of our PWM signal over time
+        // This will keep the instantaneous current in check (below 2 amps)
+        if ((this->m_desiredPWM > this->m_currentPWM) && (this->m_currentPWM < MINIMUM_MOTOR_PWM)) {
+          // We're currently under the minimum motor speed (which would be possible after the motor has started)
+          // So we can just jump to the minimum motor speed and be safe
+          this->m_currentPWM = MINIMUM_MOTOR_PWM + 1;
+        } else {
+          // We derived a little exponential curve that allows us to control the PWM signal derivative
+          
+          // A 32-bit version of our current setting for the intermediate math
+          // This is offset as part of our mathematical function
+          const int32_t offsetSetting = ((int32_t) this->m_currentPWM - 50);
+          const uint8_t maximumDelta = (uint8_t)(((offsetSetting * offsetSetting) / 9000) + 1);
+
+          // Change by either the limited max delta or the setting delta
+          this->m_currentPWM += min(maximumDelta, (uint8_t)(settingDelta));
+        }
+      } else {
+        // Our derivative is negative (we're trying to command the motor to slow down)
+        // So directly slowing down is fine
+        this->m_currentPWM = this->m_desiredPWM;
+      }
+    }
+
+  private:
+    uint8_t m_desiredPWM;
+    uint8_t m_currentPWM;
+};
+
+Motor motor = Motor();
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);e
   
-  pinMode(out1, OUTPUT); // Motor speed control pin
-  pinMode(ena, OUTPUT); // PWM pin for motor speed control
-  pinMode(in1, OUTPUT); // Motor control pin 1
-  pinMode(in2, OUTPUT); // Motor control pin 2
+  pinMode(MOTOR_PWM_PIN, OUTPUT); // Motor speed control pin
+  pinMode(MOTOR_CONTROL_PIN_1, OUTPUT); // Motor control pin 1
+  pinMode(MOTOR_CONTROL_PIN_2, OUTPUT); // Motor control pin 2
+  
+  analogWrite(MOTOR_PWM_PIN, 0); // Initially set speed to 0
 
-  analogWrite(out1, 0); // Initially set speed to 0
+    // Set motor direction (example: forward)
+  digitalWrite(MOTOR_CONTROL_PIN_1, HIGH);
+  digitalWrite(MOTOR_CONTROL_PIN_2, LOW);
 }
 
 void loop() {
   if (Serial.available()) {
-    char val = Serial.read();
-    
-    switch (val) {
-      case '0':
-        desiredSpeed = 0;
-        Serial.println("Speed is set to 0");
-        break;
-      case '1':
-        desiredSpeed = 75;
-        Serial.println("Speed is set to 1");
-        break;
-      case '2':
-        desiredSpeed = 100;
-        Serial.println("Speed is set to 2");
-        break;
-      case '3':
-        desiredSpeed = 125;
-        Serial.println("Speed is set to 3");
-        break;
-      case '4':
-        desiredSpeed = 150;
-        Serial.println("Speed is set to 4");
-        break;
-      case '5':
-        desiredSpeed = 175;
-        Serial.println("Speed is set to 5");
-        break;
-      case '6':
-        desiredSpeed = 200;
-        Serial.println("Speed is set to 6");
-        break;
-      case '7':
-        desiredSpeed = 225;
-        Serial.println("Speed is set to 7");
-        break;
-      case '8':
-        desiredSpeed = 235;
-        Serial.println("Speed is set to 8");
-        break;
-      case '9':
-        desiredSpeed = 255;
-        Serial.println("Speed is set to 9");
-        Serial.println("Approximate speed is 15500 RPM");
-        break;
-    }
+    const uint8_t inputPWMValue = Serial.read();
+    motor.setDesiredPWM(inputPWMValue);
   }
+
+  delay(15);
+
+  motor.update();
   
   // Set the motor speed to the desired speed
-  analogWrite(ena, desiredSpeed);
-
-  // Set motor direction (example: forward)
-  digitalWrite(in1, HIGH);
-  digitalWrite(in2, LOW);
+  analogWrite(MOTOR_PWM_PIN, motor.getCurrentPWM());
 }
